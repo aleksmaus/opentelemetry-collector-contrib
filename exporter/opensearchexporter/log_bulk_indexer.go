@@ -60,7 +60,7 @@ func (lbi *logBulkIndexer) appendRetryLogError(err error, log plog.Logs) {
 
 func (lbi *logBulkIndexer) submit(ctx context.Context, ld plog.Logs) {
 	forEachLog(ld, func(resource pcommon.Resource, resourceSchemaURL string, scope pcommon.InstrumentationScope, scopeSchemaURL string, log plog.LogRecord) {
-		payload, err := lbi.model.encodeLog(resource, scope, scopeSchemaURL, log)
+		payload, err := lbi.model.encodeLog(resource, scope, scopeSchemaURL, log, resourceSchemaURL, scopeSchemaURL)
 		if err != nil {
 			lbi.appendPermanentError(err)
 		} else {

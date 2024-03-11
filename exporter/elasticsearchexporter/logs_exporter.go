@@ -87,14 +87,23 @@ func (e *elasticsearchLogsExporter) pushLogsData(ctx context.Context, ld plog.Lo
 	rls := ld.ResourceLogs()
 	for i := 0; i < rls.Len(); i++ {
 		rl := rls.At(i)
+		resourceSchemaUrl := rl.SchemaUrl()
+		_ = resourceSchemaUrl
+
 		resource := rl.Resource()
+
 		ills := rl.ScopeLogs()
+
 		for j := 0; j < ills.Len(); j++ {
 			ill := ills.At(j)
+
+			scopeSchemaUrl := ill.SchemaUrl()
+			_ = scopeSchemaUrl
+
 			scope := ill.Scope()
 			logs := ill.LogRecords()
 			for k := 0; k < logs.Len(); k++ {
-				if err := e.pushLogRecord(ctx, resource, logs.At(k), scope); err != nil {
+				if err := e.pushLogRecord(ctx, resource, logs.At(k), scope, resourceSchemaUrl, scopeSchemaUrl); err != nil {
 					if cerr := ctx.Err(); cerr != nil {
 						return cerr
 					}
@@ -108,7 +117,7 @@ func (e *elasticsearchLogsExporter) pushLogsData(ctx context.Context, ld plog.Lo
 	return errors.Join(errs...)
 }
 
-func (e *elasticsearchLogsExporter) pushLogRecord(ctx context.Context, resource pcommon.Resource, record plog.LogRecord, scope pcommon.InstrumentationScope) error {
+func (e *elasticsearchLogsExporter) pushLogRecord(ctx context.Context, resource pcommon.Resource, record plog.LogRecord, scope pcommon.InstrumentationScope, resourceSchemaUrl, scopeSchemaUrl string) error {
 	fIndex := e.index
 	if e.dynamicIndex {
 		prefix := getFromAttributes(indexPrefix, resource, scope, record)
@@ -125,7 +134,7 @@ func (e *elasticsearchLogsExporter) pushLogRecord(ctx context.Context, resource 
 		fIndex = formattedIndex
 	}
 
-	document, err := e.model.encodeLog(resource, record, scope)
+	document, err := e.model.encodeLog(resource, record, scope, resourceSchemaUrl, scopeSchemaUrl)
 	if err != nil {
 		return fmt.Errorf("Failed to encode log event: %w", err)
 	}

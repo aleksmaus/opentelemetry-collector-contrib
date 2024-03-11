@@ -19,7 +19,8 @@ type mappingModel interface {
 	encodeLog(resource pcommon.Resource,
 		scope pcommon.InstrumentationScope,
 		schemaURL string,
-		record plog.LogRecord) ([]byte, error)
+		record plog.LogRecord,
+		resourceSchemaUrl, scopeSchemaUrl string) ([]byte, error)
 	encodeTrace(resource pcommon.Resource,
 		scope pcommon.InstrumentationScope,
 		schemaURL string,
@@ -42,7 +43,8 @@ type encodeModel struct {
 func (m *encodeModel) encodeLog(resource pcommon.Resource,
 	scope pcommon.InstrumentationScope,
 	schemaURL string,
-	record plog.LogRecord) ([]byte, error) {
+	record plog.LogRecord,
+	resourceSchemaUrl, scopeSchemaUrl string) ([]byte, error) {
 	if m.sso {
 		return m.encodeLogSSO(resource, scope, schemaURL, record)
 	}

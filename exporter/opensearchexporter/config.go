@@ -97,6 +97,7 @@ type MappingMode int
 const (
 	MappingSS4O MappingMode = iota
 	MappingECS
+	MappingOTel
 	MappingFlattenAttributes
 )
 
@@ -106,6 +107,8 @@ func (m MappingMode) String() string {
 		return "ss4o"
 	case MappingECS:
 		return "ecs"
+	case MappingOTel:
+		return "otel"
 	case MappingFlattenAttributes:
 		return "flatten_attributes"
 	default:
@@ -117,6 +120,7 @@ var mappingModes = func() map[string]MappingMode {
 	table := map[string]MappingMode{}
 	for _, m := range []MappingMode{
 		MappingECS,
+		MappingOTel,
 		MappingSS4O,
 		MappingFlattenAttributes,
 	} {

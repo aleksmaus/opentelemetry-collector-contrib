@@ -6,6 +6,7 @@ package elasticsearchexporter // import "github.com/open-telemetry/opentelemetry
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -17,7 +18,7 @@ import (
 )
 
 type mappingModel interface {
-	encodeLog(pcommon.Resource, plog.LogRecord, pcommon.InstrumentationScope) ([]byte, error)
+	encodeLog(pcommon.Resource, plog.LogRecord, pcommon.InstrumentationScope /*resourceSchemaUrl*/, string /*scopeSchemaUrl*/, string) ([]byte, error)
 	encodeSpan(pcommon.Resource, ptrace.Span, pcommon.InstrumentationScope) ([]byte, error)
 }
 
@@ -39,7 +40,50 @@ const (
 	attributeField = "attribute"
 )
 
-func (m *encodeModel) encodeLog(resource pcommon.Resource, record plog.LogRecord, scope pcommon.InstrumentationScope) ([]byte, error) {
+// Mapping for Otel is borrowed from https://github.com/elastic/opentelemetry-dev/blob/main/docs/ingest/docmarshaler/logs.go
+// setLogBody sets either doc.BodyText or doc.BodyStructured.
+//
+// If body is a map, or contains a map nested within an array,
+// then we set BodyStructured. Otherwise we set BodyText,
+// coercing any non-string types to strings.
+func setLogBody(doc *objmodel.Document, body pcommon.Value) {
+	switch body.Type() {
+	case pcommon.ValueTypeMap:
+		doc.AddAttribute("body_structured", body)
+	case pcommon.ValueTypeSlice:
+		slice := body.Slice()
+		for i := 0; i < slice.Len(); i++ {
+			switch slice.At(i).Type() {
+			case pcommon.ValueTypeMap, pcommon.ValueTypeSlice:
+				doc.AddAttribute("body_structured", body)
+				return
+			}
+		}
+
+		// TODO: likely can be optimized
+		bodyTextVal := pcommon.NewValueSlice()
+		bodyText := bodyTextVal.Slice()
+		bodyText.EnsureCapacity(slice.Len())
+
+		for i := 0; i < slice.Len(); i++ {
+			elem := slice.At(i)
+			bodyText.AppendEmpty().SetStr(elem.AsString())
+		}
+		doc.AddAttribute("body_text", bodyTextVal)
+	default:
+		doc.AddString("body_text", body.AsString())
+	}
+}
+
+// ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+// TODO: Current implementation needs to be refactored, the resourceLogs.SchemUrl and scopeLogs.SchemaUrl are not passed in
+// so hacked it in for now.
+// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+// The more efficient logs parsing seems to be already implemented in
+// https://github.com/elastic/opentelemetry-dev/blob/main/docs/ingest/docmarshaler/logs.go
+// ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+func (m *encodeModel) encodeLog(resource pcommon.Resource, record plog.LogRecord, scope pcommon.InstrumentationScope, resourceSchemaUrl, scopeSchemaUrl string) ([]byte, error) {
 	var document objmodel.Document
 
 	switch m.mode {
@@ -87,6 +131,52 @@ func (m *encodeModel) encodeLog(resource pcommon.Resource, record plog.LogRecord
 			document.AddAttribute(k, v)
 			return true
 		})
+	case MappingOTel:
+		document.AddTimestamp("@timestamp", record.Timestamp())
+		document.AddTimestamp("observed_timestamp", record.ObservedTimestamp())
+
+		// Could be enriched with configurable datastream options
+		// DataStream: marshalgen.DataStream{
+		// 	Type:      "logs",
+		// 	Dataset:   "generic",
+		// 	Namespace: "default",
+		// },
+
+		document.AddString("span_id", record.SpanID().String())
+		document.AddString("trace_id", record.TraceID().String())
+		document.AddInt("trace_flags", int64(byte(record.Flags())))
+		document.AddString("severity_text", record.SeverityText())
+		document.AddInt("severity_number", int64(record.SeverityNumber()))
+
+		fmt.Println("scopeSchemaUrl:", scopeSchemaUrl)
+		document.AddString("schema_url", scopeSchemaUrl)
+
+		res := pcommon.NewValueMap()
+		mres := res.Map()
+		resourceAttributes := mres.PutEmptyMap("attributes")
+
+		mres.PutInt("dropped_attributes_count", int64(record.DroppedAttributesCount()))
+		mres.PutStr("schema_url", resourceSchemaUrl)
+		resource.Attributes().CopyTo(resourceAttributes)
+
+		document.AddAttribute("resource", res)
+
+		sco := pcommon.NewValueMap()
+		msco := sco.Map()
+		scopeAttributes := mres.PutEmptyMap("attributes")
+
+		msco.PutStr("name", scope.Name())
+		msco.PutStr("version", scope.Version())
+		msco.PutInt("dropped_attributes_count", int64(scope.DroppedAttributesCount()))
+		scope.Attributes().CopyTo(scopeAttributes)
+
+		document.AddAttribute("scope", sco)
+
+		document.AddAttributes("attributes", record.Attributes())
+		document.AddInt("dropped_attributes_count", int64(record.DroppedAttributesCount()))
+
+		setLogBody(&document, record.Body())
+
 	default:
 		document.AddTimestamp("@timestamp", record.Timestamp()) // We use @timestamp in order to ensure that we can index if the default data stream logs template is used.
 		document.AddTraceID("TraceId", record.TraceID())
