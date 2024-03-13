@@ -1,0 +1,48 @@
+# REMOVE before contributing!!!
+# This is just a sample configuration for auditd POC
+receivers:
+  journald:
+    priority: debug # default is info and is missing events that our auditd captures
+    matches:
+      - _TRANSPORT: audit
+        
+processors:
+  transform:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements: 
+          - set(attributes["auditd.log.ses"], body["_AUDIT_SESSION"])
+          - set(attributes["auditd.log.op"], body["AUDIT_FIELD_OP"])
+          - set(attributes["auditd.log.record_type"], body["_AUDIT_TYPE_NAME"])
+          - set(attributes["auditd.log.sequence"], Int(body["_AUDIT_ID"]))
+          - set(attributes["auditd.log.uid"], body["_AUDIT_LOGINUID"])
+          - set(attributes["auditd.log.subj"], body["_SELINUX_CONTEXT"])
+          - set(attributes["auditd.log.grantors"], body["AUDIT_FIELD_GRANTORS"])
+          - flatten(attributes)
+
+exporters:
+  debug:
+    #verbosity: normal
+    verbosity: detailed
+  elasticsearch:
+    flush:
+      interval: 1s
+    endpoints:
+      - https://my-deployment-862646.es.us-west2.gcp.elastic-cloud.com
+    user: elastic
+    password: MSDHFZ6QGFwLtSCsaJFyAUKK
+    logs_index: "logs-otel.auditd.log-default"
+    mapping:
+      mode: otel
+      # dedot: false
+
+service:
+  pipelines:
+    logs:
+      receivers:
+        - journald
+      processors: [transform]
+      exporters:
+        - debug
+        - elasticsearch
