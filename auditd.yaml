@@ -2,11 +2,43 @@
 # This is just a sample configuration for auditd POC
 receivers:
   journald:
+    #start_at: beginning
     priority: debug # default is info and is missing events that our auditd captures
     matches:
       - _TRANSPORT: audit
 
 processors:
+  resourcedetection/system:
+    detectors: ["system"]
+    system:
+      hostname_sources: ["os"]
+      resource_attributes:
+        host.arch:
+          enabled: true
+        host.name:
+          enabled: true
+        host.id:
+          enabled: true
+        host.ip:
+          enabled: true
+        host.mac:
+          enabled: true
+        host.cpu.vendor.id:
+          enabled: true
+        host.cpu.family:
+          enabled: true
+        host.cpu.model.id:
+          enabled: true
+        host.cpu.model.name:
+          enabled: true
+        host.cpu.stepping:
+          enabled: true
+        host.cpu.cache.l2.size:
+          enabled: true
+        os.description:
+          enabled: true
+        os.type:
+          enabled: true
   transform:
     error_mode: ignore
     log_statements:
@@ -39,7 +71,7 @@ service:
     logs:
       receivers:
         - journald
-      processors: [transform]
+      processors: ["resourcedetection/system", "transform"]
       exporters:
         - debug
         - elasticsearch
