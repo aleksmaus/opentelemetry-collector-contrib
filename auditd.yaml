@@ -2,7 +2,7 @@
 # This is just a sample configuration for auditd POC
 receivers:
   journald:
-    #start_at: beginning
+    # start_at: beginning
     priority: debug # default is info and is missing events that our auditd captures
     matches:
       - _TRANSPORT: audit
@@ -43,15 +43,22 @@ processors:
     error_mode: ignore
     log_statements:
       - context: log
-        statements: 
-          - set(attributes["auditd.log.ses"], body["_AUDIT_SESSION"])
+        statements:
+          # auditd
+          - set(attributes["auditd.log.grantors"], body["AUDIT_FIELD_GRANTORS"])
           - set(attributes["auditd.log.op"], body["AUDIT_FIELD_OP"])
           - set(attributes["auditd.log.record_type"], body["_AUDIT_TYPE_NAME"])
           - set(attributes["auditd.log.sequence"], Int(body["_AUDIT_ID"]))
-          - set(attributes["auditd.log.uid"], body["_AUDIT_LOGINUID"])
+          - set(attributes["auditd.log.ses"], body["_AUDIT_SESSION"])
+          - set(attributes["auditd.log.syscall"], body["_AUDIT_FIELD_SYSCALL"])
           - set(attributes["auditd.log.subj"], body["_SELINUX_CONTEXT"])
-          - set(attributes["auditd.log.grantors"], body["AUDIT_FIELD_GRANTORS"])
-
+          - set(attributes["auditd.log.uid"], body["_AUDIT_LOGINUID"])
+          # process
+          - set(attributes["process.executable"], body["_EXE"])
+          - set(attributes["process.exit_code"], Int(body["_AUDIT_FIELD_EXIT"]))
+          - set(attributes["process.name"], body["_COMM"])
+          - set(attributes["process.pid"], Int(body["_PID"]))
+          - set(attributes["process.parent.pid"], Int(body["_PPID"]))
 exporters:
   debug:
     verbosity: normal

@@ -155,13 +155,13 @@ func (m *encodeModel) encodeLog(resource pcommon.Resource, record plog.LogRecord
 		mres := res.Map()
 		resourceAttributes := mres.PutEmptyMap("attributes")
 
-		// Agent properties
-		resourceAttributes.PutStr("agent.type", m.buildInfo.Command)
-		resourceAttributes.PutStr("agent.version", m.buildInfo.Version)
-
 		mres.PutInt("dropped_attributes_count", int64(record.DroppedAttributesCount()))
 		mres.PutStr("schema_url", resourceSchemaUrl)
 		resource.Attributes().CopyTo(resourceAttributes)
+
+		// Agent properties
+		resourceAttributes.PutStr("agent.type", m.buildInfo.Command)
+		resourceAttributes.PutStr("agent.version", m.buildInfo.Version)
 
 		document.AddAttribute("resource", res)
 
