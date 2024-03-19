@@ -6,7 +6,6 @@ package elasticsearchexporter // import "github.com/open-telemetry/opentelemetry
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"time"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -148,7 +147,6 @@ func (m *encodeModel) encodeLog(resource pcommon.Resource, record plog.LogRecord
 		document.AddString("severity_text", record.SeverityText())
 		document.AddInt("severity_number", int64(record.SeverityNumber()))
 
-		fmt.Println("scopeSchemaUrl:", scopeSchemaUrl)
 		document.AddString("schema_url", scopeSchemaUrl)
 
 		res := pcommon.NewValueMap()
