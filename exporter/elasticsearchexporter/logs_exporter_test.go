@@ -18,6 +18,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/component"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 )
@@ -137,7 +138,7 @@ func TestExporter_New(t *testing.T) {
 				t.Setenv(k, v)
 			}
 
-			exporter, err := newLogsExporter(zap.NewNop(), test.config)
+			exporter, err := newLogsExporter(zap.NewNop(), test.config, component.NewDefaultBuildInfo())
 			if exporter != nil {
 				defer func() {
 					require.NoError(t, exporter.Shutdown(context.TODO()))
@@ -485,7 +486,7 @@ func TestExporter_PushEvent(t *testing.T) {
 }
 
 func newTestExporter(t *testing.T, url string, fns ...func(*Config)) *elasticsearchLogsExporter {
-	exporter, err := newLogsExporter(zaptest.NewLogger(t), withTestExporterConfig(fns...)(url))
+	exporter, err := newLogsExporter(zaptest.NewLogger(t), withTestExporterConfig(fns...)(url), component.NewDefaultBuildInfo())
 	require.NoError(t, err)
 
 	t.Cleanup(func() {

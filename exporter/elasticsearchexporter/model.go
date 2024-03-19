@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/ptrace"
@@ -28,9 +29,10 @@ type mappingModel interface {
 //
 // See: https://github.com/open-telemetry/oteps/blob/master/text/logs/0097-log-data-model.md
 type encodeModel struct {
-	dedup bool
-	dedot bool
-	mode  MappingMode
+	dedup     bool
+	dedot     bool
+	mode      MappingMode
+	buildInfo component.BuildInfo
 }
 
 const (
@@ -152,6 +154,10 @@ func (m *encodeModel) encodeLog(resource pcommon.Resource, record plog.LogRecord
 		res := pcommon.NewValueMap()
 		mres := res.Map()
 		resourceAttributes := mres.PutEmptyMap("attributes")
+
+		// Agent properties
+		resourceAttributes.PutStr("agent.type", m.buildInfo.Command)
+		resourceAttributes.PutStr("agent.version", m.buildInfo.Version)
 
 		mres.PutInt("dropped_attributes_count", int64(record.DroppedAttributesCount()))
 		mres.PutStr("schema_url", resourceSchemaUrl)

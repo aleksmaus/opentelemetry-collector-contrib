@@ -80,7 +80,7 @@ func createLogsExporter(
 
 	setDefaultUserAgentHeader(cf, set.BuildInfo)
 
-	logsExporter, err := newLogsExporter(set.Logger, cf)
+	logsExporter, err := newLogsExporter(set.Logger, cf, set.BuildInfo)
 	if err != nil {
 		return nil, fmt.Errorf("cannot configure Elasticsearch logsExporter: %w", err)
 	}
