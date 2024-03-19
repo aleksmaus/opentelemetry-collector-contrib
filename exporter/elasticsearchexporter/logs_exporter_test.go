@@ -520,6 +520,6 @@ func mustSendLogsWithAttributes(t *testing.T, exporter *elasticsearchLogsExporte
 	logRecords := scopeLog.LogRecords().At(0)
 	logRecords.Body().SetStr(body)
 
-	err := exporter.pushLogRecord(context.TODO(), resSpans.Resource(), logRecords, scopeLog.Scope())
+	err := exporter.pushLogRecord(context.TODO(), resSpans.Resource(), logRecords, scopeLog.Scope(), "", "")
 	require.NoError(t, err)
 }

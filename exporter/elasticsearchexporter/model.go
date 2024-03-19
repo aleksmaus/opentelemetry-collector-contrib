@@ -198,7 +198,7 @@ func (m *encodeModel) encodeLog(resource pcommon.Resource, record plog.LogRecord
 	}
 
 	var buf bytes.Buffer
-	err := document.Serialize(&buf, m.dedot)
+	err := document.Serialize(&buf, m.dedot, m.mode == MappingOTel)
 	return buf.Bytes(), err
 }
 
@@ -227,7 +227,7 @@ func (m *encodeModel) encodeSpan(resource pcommon.Resource, span ptrace.Span, sc
 	}
 
 	var buf bytes.Buffer
-	err := document.Serialize(&buf, m.dedot)
+	err := document.Serialize(&buf, m.dedot, m.mode == MappingOTel)
 	return buf.Bytes(), err
 }
 
