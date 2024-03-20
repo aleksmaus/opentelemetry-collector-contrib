@@ -2,12 +2,23 @@
 # This is just a sample configuration for auditd POC
 receivers:
   journald:
-    # start_at: beginning
+    #start_at: beginning
     priority: debug # default is info and is missing events that our auditd captures
     matches:
       - _TRANSPORT: audit
 
 processors:
+  resource:
+    attributes:
+      - key: data_stream.namespace
+        value: default
+        action: upsert
+      - key: data_stream.type
+        value: logs
+        action: upsert
+      - key: data_stream.dataset
+        value: otel.auditd.log
+        action: upsert
   resourcedetection/system:
     detectors: ["system"]
     system:
@@ -59,6 +70,18 @@ processors:
           - set(attributes["process.name"], body["_COMM"])
           - set(attributes["process.pid"], Int(body["_PID"]))
           - set(attributes["process.parent.pid"], Int(body["_PPID"]))
+          # event
+          - set(attributes["event.kind"], "event")
+          - set(attributes["event.action"], body["_AUDIT_TYPE_NAME"])
+          - set(attributes["event.dataset"], resource.attributes["data_stream.dataset"])
+
+          # TODO: event category, type, action, outcome need to be resolved into proper values
+          - set(attributes["event.category"], ["process"])
+          - set(attributes["event.type"], ["info"])
+          - set(attributes["event.action"], body["_AUDIT_TYPE_NAME"])
+          - set(attributes["event.outcome"], ["success"])
+
+
 exporters:
   debug:
     verbosity: normal
@@ -78,7 +101,7 @@ service:
     logs:
       receivers:
         - journald
-      processors: ["resourcedetection/system", "transform"]
+      processors: ["resource", "resourcedetection/system", "transform"]
       exporters:
         - debug
         - elasticsearch
