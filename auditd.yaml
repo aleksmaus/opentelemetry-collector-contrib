@@ -62,8 +62,20 @@ processors:
           - set(attributes["auditd.log.sequence"], Int(body["_AUDIT_ID"]))
           - set(attributes["auditd.log.ses"], body["_AUDIT_SESSION"])
           - set(attributes["auditd.log.syscall"], body["_AUDIT_FIELD_SYSCALL"])
-          - set(attributes["auditd.log.subj"], body["_SELINUX_CONTEXT"])
-          - set(attributes["auditd.log.uid"], body["_AUDIT_LOGINUID"])
+          - set(attributes["auditd.log.subj"], body["AUDIT_FIELD_TERMINALs"])
+
+          # Lookup user and group ids experiment
+          # - set(attributes["auditd.log.AUID"], LookupUserID(body["_AUID"])) where body["_AUID"] != nil
+          # - set(attributes["auditd.log.UID"], LookupUserID(body["_UID"])) where body["_UID"] != nil
+          # - set(attributes["auditd.log.GID"], LookupGroupID(body["_GID"])) where body["_GID"] != nil
+
+          # Set user
+          - set(attributes["user.effective.name"], body["AUDIT_FIELD_ACCT"])
+          - set(attributes["user.audit.id"], body["_AUDIT_LOGINUID"])
+          - set(attributes["user.id"], body["_UID"])
+          - set(attributes["user.name"], body["AUDIT_FIELD_ACCT"])
+          - set(attributes["user.terminal"], body["AUDIT_FIELD_ACCT"])
+
           # process
           - set(attributes["process.executable"], body["_EXE"])
           - set(attributes["process.exit_code"], Int(body["_AUDIT_FIELD_EXIT"]))
