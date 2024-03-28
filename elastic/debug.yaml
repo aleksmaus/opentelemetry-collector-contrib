@@ -1,0 +1,32 @@
+receivers:
+  journald:
+    priority: debug
+    matches:
+      - _TRANSPORT: audit
+    # operators:
+    #   - type: copy
+    #     from: body.MESSAGE
+    #     to: attributes["message"]
+
+exporters:
+  debug:
+    verbosity: detailed
+  elasticsearch:
+    flush:
+      interval: 1s
+    endpoints:
+      - https://my-deployment-862646.es.us-west2.gcp.elastic-cloud.com
+    user: elastic
+    password: MSDHFZ6QGFwLtSCsaJFyAUKK
+    logs_index: "logs-otel.auditd-default"
+    mapping:
+      mode: otel
+
+service:
+  pipelines:
+    logs:
+      receivers:
+        - journald
+      exporters:
+        - debug
+        #- elasticsearch

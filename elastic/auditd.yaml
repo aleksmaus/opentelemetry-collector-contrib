@@ -2,7 +2,7 @@
 # This is just a sample configuration for auditd POC
 receivers:
   journald:
-    #start_at: beginning
+    # start_at: beginning
     priority: debug # default is info and is missing events that our auditd captures
     matches:
       - _TRANSPORT: audit
@@ -61,8 +61,7 @@ processors:
           - set(attributes["auditd.log.record_type"], body["_AUDIT_TYPE_NAME"])
           - set(attributes["auditd.log.sequence"], Int(body["_AUDIT_ID"]))
           - set(attributes["auditd.log.ses"], body["_AUDIT_SESSION"])
-          - set(attributes["auditd.log.syscall"], body["_AUDIT_FIELD_SYSCALL"])
-          - set(attributes["auditd.log.subj"], body["AUDIT_FIELD_TERMINALs"])
+          - set(attributes["auditd.log.subj"], body["_SELINUX_CONTEXT"])
 
           # Lookup user and group ids experiment
           # - set(attributes["auditd.log.AUID"], LookupUserID(body["_AUID"])) where body["_AUID"] != nil
@@ -70,11 +69,11 @@ processors:
           # - set(attributes["auditd.log.GID"], LookupGroupID(body["_GID"])) where body["_GID"] != nil
 
           # Set user
-          - set(attributes["user.effective.name"], body["AUDIT_FIELD_ACCT"])
+          - set(attributes["user.effective.name"], LookupUserID(body["_UID"]))
           - set(attributes["user.audit.id"], body["_AUDIT_LOGINUID"])
           - set(attributes["user.id"], body["_UID"])
-          - set(attributes["user.name"], body["AUDIT_FIELD_ACCT"])
-          - set(attributes["user.terminal"], body["AUDIT_FIELD_ACCT"])
+          - set(attributes["user.name"], LookupUserID(body["_UID"]))
+          - set(attributes["user.terminal"], body["AUDIT_FIELD_TERMINAL"])
 
           # process
           - set(attributes["process.executable"], body["_EXE"])
@@ -93,9 +92,20 @@ processors:
           - set(attributes["event.action"], body["_AUDIT_TYPE_NAME"])
           - set(attributes["event.outcome"], ["success"])
 
+          # Using pipeline for the events category, type, etc. resolution
+          # In order to use the existing pipeline with minimal modifications need to prepend "type=" before raw message
+          # That's what Grok is expecting at the moment
+          # https://github.com/elastic/integrations/blob/main/packages/auditd/data_stream/log/elasticsearch/ingest_pipeline/default.yml
+          #
+
+          # The pipeline was slightly modified since we can't add top level "message" attribute at this level
+          # so we change the pipeline to look into attributes.auditd.logs.message field
+          # - set(body["MESSAGE"], Concat(["type", body["MESSAGE"]], "="))
+
 
 exporters:
   debug:
+    # verbosity: detailed
     verbosity: normal
   elasticsearch:
     flush:
@@ -105,6 +115,7 @@ exporters:
     user: elastic
     password: oQO1decGF4VPATiVNrYvR39C
     logs_index: "logs-otel.auditd.log-default"
+    # pipeline: "logs-otel.auditd.log-pipeline"
     mapping:
       mode: otel
 

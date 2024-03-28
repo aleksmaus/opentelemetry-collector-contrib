@@ -1,0 +1,28 @@
+receivers:
+  journald:
+    directory: /var/log/journal
+    units:
+      - auditd
+
+exporters:
+  debug:
+    verbosity: normal
+  elasticsearch:
+    flush:
+      interval: 1s
+    endpoints:
+      - https://my-deployment-862646.es.us-west2.gcp.elastic-cloud.com
+    user: elastic
+    password: MSDHFZ6QGFwLtSCsaJFyAUKK
+    logs_index: "journald_auditd_second"
+    mapping:
+      mode: otel
+
+service:
+  pipelines:
+    logs:
+      receivers:
+        - journald
+      exporters:
+        - debug
+        - elasticsearch
