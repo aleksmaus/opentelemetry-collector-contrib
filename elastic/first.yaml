@@ -13,7 +13,7 @@ exporters:
     endpoints:
       - https://my-deployment-862646.es.us-west2.gcp.elastic-cloud.com
     user: elastic
-    password: MSDHFZ6QGFwLtSCsaJFyAUKK
+    password: XH43fjGjleqrFzxhEY797WHT
     logs_index: "journald_auditd_first"
 
 service:

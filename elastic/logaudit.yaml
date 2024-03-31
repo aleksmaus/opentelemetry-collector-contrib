@@ -1,0 +1,36 @@
+receivers:
+  filelog:
+    start_at: beginning
+    include:
+    - /Users/amaus/elastic/opentelemetry-collector-contrib/elastic/audit.log
+
+processors:
+  auditd:
+    resolve_ids: true
+
+exporters:
+  debug:
+    verbosity: detailed
+    #verbosity: normal
+  elasticsearch:
+    #dry: true
+    flush:
+      interval: 1s
+    endpoints:
+      - https://0d1c5d78186540019eb8ddce80f4ef7c.us-west2.gcp.elastic-cloud.com
+    user: elastic
+    password: XH43fjGjleqrFzxhEY797WHT
+    logs_index: "logs-otel.auditd.log-default"
+    # pipeline: "logs-otel.auditd.log-pipeline"
+    mapping:
+      mode: otel
+
+service:
+  pipelines:
+    logs:
+      receivers:
+        - filelog
+      processors: ["auditd"]
+      exporters:
+        #- debug
+        - elasticsearch
