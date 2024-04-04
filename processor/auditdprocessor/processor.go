@@ -5,10 +5,11 @@ package auditdprocessor // import "github.com/open-telemetry/opentelemetry-colle
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strconv"
+	"time"
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -30,13 +31,22 @@ var errProcessorNotRunning = errors.New("auditd processor is not running")
 type Processor struct {
 	cfg    Config
 	logger *zap.Logger
+
+	reassembler *SyncReassembler
 }
 
 func NewProcessor(cfg Config, settings component.TelemetrySettings) (*Processor, error) {
 
+	//TODO: pass the logger
+	reassembler, err := NewSyncReassember(5, 2*time.Second, true)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Processor{
-		cfg:    cfg,
-		logger: settings.Logger,
+		cfg:         cfg,
+		logger:      settings.Logger,
+		reassembler: reassembler,
 	}, nil
 }
 
@@ -57,15 +67,24 @@ func (p *Processor) ProcessLogs(ctx context.Context, ld plog.Logs) (plog.Logs, e
 }
 
 func (p *Processor) processLogs(ctx context.Context, ld plog.Logs) (plog.Logs, error) {
+	// I think for auditd is appropriate to reuse the resource and scope for coalesed event messages if they are all coming from the same source I guess
+	// Brute force this approach for now and then could try to figure out how to track all the resources/scopes down to coalesced messaages
 	resourceLogsSlice := ld.ResourceLogs()
 	for i := 0; i < resourceLogsSlice.Len(); i++ {
 		resourceLogs := resourceLogsSlice.At(i)
+
 		scopeLogsSlice := resourceLogs.ScopeLogs()
 		for i := 0; i < scopeLogsSlice.Len(); i++ {
 			scopeLogs := scopeLogsSlice.At(i)
-			logRecordSlice := scopeLogs.LogRecords()
+
+			oldScopeLogs := plog.NewScopeLogs()
+			// TODO: There might be more efficient way to do this.
+			scopeLogs.MoveTo(oldScopeLogs)
+			logRecordSlice := oldScopeLogs.LogRecords()
+
 			for i := 0; i < logRecordSlice.Len(); i++ {
 				logRecord := logRecordSlice.At(i)
+
 				msg := logRecord.Body().AsString()
 				auditMsg, err := auparse.ParseLogLine(msg)
 				if err != nil {
@@ -73,68 +92,87 @@ func (p *Processor) processLogs(ctx context.Context, ld plog.Logs) (plog.Logs, e
 					return ld, err
 				}
 
-				// TODO: combine related messages
+				// Loosing original logRecord Attributes here
+				// Not exactly sure at the moment what to do with them if we are
+				// collapsing multiple log records into fewer number of records with
+				// coalesced events
+				evres := p.reassembler.PushMessage(auditMsg)
 
-				// TODO: improve errors messages below
+				for _, evr := range evres {
+					if evr.Err != nil {
+						p.logger.Error("failed to coalesce messages: %v", zap.Error(err))
+						return ld, err
+					}
+					event := evr.Event
 
-				msgs := []*auparse.AuditMessage{auditMsg}
+					logRecord := scopeLogs.LogRecords().AppendEmpty()
 
-				event, err := aucoalesce.CoalesceMessages(msgs)
-				if err != nil {
-					log.Printf("failed to coalesce messages: %v", err)
-					return ld, err
-				}
+					// Set timestamp from log msg
+					logRecord.SetTimestamp(pcommon.NewTimestampFromTime(event.Timestamp))
 
-				if p.cfg.ResolveIDs {
-					aucoalesce.ResolveIDs(event)
-				}
+					// Set structured body from event JSON
+					// The only way it seems is to marshal event into JSON
+					// then unmarshal into map[string]any
+					// not effecient
+					b, _ := json.Marshal(event)
+					var m map[string]any
+					_ = json.Unmarshal(b, &m)
+					err = logRecord.Body().FromRaw(m)
+					if err != nil {
+						fmt.Println("FAILED logRecord.Body().FromRaw(m):", err)
+					}
 
-				// Set timestamp from log msg
-				logRecord.SetTimestamp(pcommon.NewTimestampFromTime(auditMsg.Timestamp))
+					attr := logRecord.Attributes()
 
-				// The following breaks on map key that has value []string
-				// In this particular case, for example: "tags": ["aarch64"]
-				// The underlying go-libaudit library adds this to the message
-				// Remove tags from the auditMsg.ToMapStr()
-				auditMsgMap := auditMsg.ToMapStr()
+					// Populate "auditd.log" from data
+					if data, ok := m["data"]; ok {
+						logMap := attr.PutEmptyMap("auditd").PutEmptyMap("log")
+						mdata, ok := data.(map[string]any)
+						if ok {
+							dataMap := pcommon.NewMap()
+							_ = dataMap.FromRaw(mdata)
+							dataMap.CopyTo(logMap)
+						}
+						logMap.PutInt("sequence", int64(event.Sequence))
+					}
 
-				if vtags, ok := auditMsgMap["tags"]; ok {
-					if tags, ok := vtags.([]string); ok && len(tags) > 0 {
-						tagsSlice := logRecord.Attributes().PutEmptySlice("tags")
-						for _, tag := range tags {
-							tagsSlice.AppendEmpty().SetStr(tag)
+					// Populate tags
+					if vtags, ok := m["tags"]; ok {
+						if tags, ok := vtags.([]string); ok && len(tags) > 0 {
+							tagsSlice := attr.PutEmptySlice("tags")
+							for _, tag := range tags {
+								tagsSlice.AppendEmpty().SetStr(tag)
+							}
+						}
+					}
+
+					// // Set process attributes
+					setProcess(attr, event)
+
+					// // TODO: log.offset is missing, not sure if possible to get yet
+					// // "offset": 1757629
+
+					// Set ECS attributes
+					if ecs, ok := m["ecs"]; ok {
+						mecs, ok := ecs.(map[string]any)
+						if ok {
+							ecsMap := pcommon.NewMap()
+							_ = ecsMap.FromRaw(mecs)
+							ecsMap.Range(func(k string, v pcommon.Value) bool {
+								tv := attr.PutEmpty(k)
+								v.CopyTo(tv)
+								if k == "event" {
+									// Set event action
+									if event.Summary.Action != "" {
+										attr.PutStr("event.action", event.Summary.Action)
+									}
+								}
+								return true
+							})
 						}
 					}
 				}
-				delete(auditMsgMap, "tags")
 
-				// Delete @timestamp property it is already set on logRecord above
-				delete(auditMsgMap, "@timestamp")
-
-				// TODO: delete raw_msg
-				delete(auditMsgMap, "raw_msg")
-
-				auditMsgMap["sequence"] = auditMsg.Sequence
-
-				m := pcommon.NewMap()
-				err = m.FromRaw(auditMsgMap)
-				if err != nil {
-					return ld, err
-				}
-				m.CopyTo(logRecord.Attributes().PutEmptyMap("auditd").PutEmptyMap("log"))
-				m.CopyTo(logRecord.Body().SetEmptyMap())
-
-				// Set process attributes
-				setProcess(&logRecord, auditMsgMap, event)
-
-				// TODO: log.offset is missing
-				// "offset": 1757629
-
-				// Set user attributes
-				setUser(&logRecord, event)
-
-				// Set event attributes
-				setEvent(&logRecord, auditMsgMap, event)
 			}
 		}
 	}
@@ -142,31 +180,28 @@ func (p *Processor) processLogs(ctx context.Context, ld plog.Logs) (plog.Logs, e
 	return ld, nil
 }
 
-func setProcess(logRecord *plog.LogRecord, logMsgMap map[string]any, event *aucoalesce.Event) {
-	attrs := logRecord.Attributes()
-	putIntFromStr(attrs, "process.pid", event.Process.PID)
-	putIntFromStr(attrs, "process.parent.pid", event.Process.PPID)
+func setProcess(attr pcommon.Map, event *aucoalesce.Event) {
+	putIntFromStr(attr, "process.pid", event.Process.PID)
+	putIntFromStr(attr, "process.parent.pid", event.Process.PPID)
 
 	if event.Process.Name != "" {
-		attrs.PutStr("process.name", event.Process.Name)
+		attr.PutStr("process.name", event.Process.Name)
 	}
 
 	// "exit" code was not parsed into event
-	if v, ok := logMsgMap["exit"]; ok {
-		if s, ok := v.(string); ok {
-			attrs.PutStr("process.exit_code", s)
-		}
+	if s, ok := event.Data["exit"]; ok {
+		attr.PutStr("process.exit_code", s)
 	}
 
 	if event.Process.Exe != "" {
-		attrs.PutStr("process.executable", event.Process.Exe)
+		attr.PutStr("process.executable", event.Process.Exe)
 	}
 	if event.Process.CWD != "" {
-		attrs.PutStr("process.working_directory", event.Process.CWD)
+		attr.PutStr("process.working_directory", event.Process.CWD)
 	}
 	if len(event.Process.Args) > 0 {
-		attrs.PutInt("process.args_count", int64(len(event.Process.Args)))
-		args := attrs.PutEmptySlice("process.args")
+		attr.PutInt("process.args_count", int64(len(event.Process.Args)))
+		args := attr.PutEmptySlice("process.args")
 		for _, arg := range event.Process.Args {
 			args.AppendEmpty().SetStr(arg)
 		}
