@@ -1,9 +1,14 @@
 receivers:
   filelog:
-    start_at: beginning
+    # start_at: beginning
+    storage: file_storage/filelogreceiver
     include_file_path: true
     include:
-    - /Users/amaus/elastic/opentelemetry-collector-contrib/elastic/audit.log
+    - /var/log/audit/audit.log
+
+extensions:
+  file_storage/filelogreceiver:
+    directory: /var/lib/otelcol/file_storage/receiver
 
 processors:
   resource:
@@ -19,7 +24,37 @@ processors:
         action: upsert
   auditd:
     resolve_ids: true
-
+  resourcedetection/system:
+    detectors: ["system"]
+    system:
+      hostname_sources: ["os"]
+      resource_attributes:
+        host.arch:
+          enabled: true
+        host.name:
+          enabled: true
+        host.id:
+          enabled: true
+        host.ip:
+          enabled: true
+        host.mac:
+          enabled: true
+        host.cpu.vendor.id:
+          enabled: true
+        host.cpu.family:
+          enabled: true
+        host.cpu.model.id:
+          enabled: true
+        host.cpu.model.name:
+          enabled: true
+        host.cpu.stepping:
+          enabled: true
+        host.cpu.cache.l2.size:
+          enabled: true
+        os.description:
+          enabled: true
+        os.type:
+          enabled: true
 exporters:
   debug:
     # verbosity: detailed
@@ -29,20 +64,21 @@ exporters:
     flush:
       interval: 1s
     endpoints:
-      - https://0d1c5d78186540019eb8ddce80f4ef7c.us-west2.gcp.elastic-cloud.com
+      - https://e76e1f6fbfc4432b860f7b330a86d3da.us-west2.gcp.elastic-cloud.com
     user: elastic
-    password: XH43fjGjleqrFzxhEY797WHT
+    password: Iw1NixmF7raxxxxxxx
     logs_index: "logs-otel.auditd.log-default"
     # pipeline: "logs-otel.auditd.log-pipeline"
     mapping:
       mode: otel
 
 service:
+  extensions: [file_storage/filelogreceiver]
   pipelines:
     logs:
       receivers:
         - filelog
-      processors: ["resource", "auditd"]
+      processors: ["resource", "auditd", "resourcedetection/system"]
       exporters:
         #
         - debug
