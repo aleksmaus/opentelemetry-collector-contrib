@@ -34,7 +34,7 @@ func TestResolver(t *testing.T) {
 			tempDir := t.TempDir()
 			temp := filetest.OpenTemp(t, tempDir)
 
-			attributes, err := r.Resolve(temp.Name())
+			attributes, err := r.Resolve(temp.Name(), 0)
 			assert.NoError(t, err)
 
 			var expectLen int

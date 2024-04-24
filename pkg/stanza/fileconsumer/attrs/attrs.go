@@ -12,6 +12,7 @@ import (
 const (
 	LogFileName         = "log.file.name"
 	LogFilePath         = "log.file.path"
+	LogOffset           = "log.offset"
 	LogFileNameResolved = "log.file.name_resolved"
 	LogFilePathResolved = "log.file.path_resolved"
 )
@@ -19,11 +20,12 @@ const (
 type Resolver struct {
 	IncludeFileName         bool `mapstructure:"include_file_name,omitempty"`
 	IncludeFilePath         bool `mapstructure:"include_file_path,omitempty"`
+	IncludeFileOffset       bool `mapstructure:"include_file_offset,omitempty"`
 	IncludeFileNameResolved bool `mapstructure:"include_file_name_resolved,omitempty"`
 	IncludeFilePathResolved bool `mapstructure:"include_file_path_resolved,omitempty"`
 }
 
-func (r *Resolver) Resolve(path string) (attributes map[string]any, err error) {
+func (r *Resolver) Resolve(path string, offset int64) (attributes map[string]any, err error) {
 	// size 2 is sufficient if not resolving symlinks. This optimizes for the most performant cases.
 	attributes = make(map[string]any, 2)
 	if r.IncludeFileName {
@@ -31,6 +33,9 @@ func (r *Resolver) Resolve(path string) (attributes map[string]any, err error) {
 	}
 	if r.IncludeFilePath {
 		attributes[LogFilePath] = path
+	}
+	if r.IncludeFileOffset {
+		attributes[LogOffset] = offset
 	}
 	if !r.IncludeFileNameResolved && !r.IncludeFilePathResolved {
 		return attributes, nil

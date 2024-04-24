@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/decode"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/fileconsumer/attrs"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/fileconsumer/emit"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/fileconsumer/internal/fingerprint"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/stanza/fileconsumer/internal/header"
@@ -69,6 +70,8 @@ func (r *Reader) ReadToEnd(ctx context.Context) {
 		default:
 		}
 
+		pos := s.Pos()
+
 		ok := s.Scan()
 		if !ok {
 			if err := s.Error(); err != nil {
@@ -84,6 +87,11 @@ func (r *Reader) ReadToEnd(ctx context.Context) {
 			r.logger.Errorw("decode: %w", zap.Error(err))
 			r.Offset = s.Pos() // move past the bad token or we may be stuck
 			continue
+		}
+
+		// If log.offset attribute was set update it to the current position
+		if _, ok := r.FileAttributes[attrs.LogOffset]; ok {
+			r.FileAttributes[attrs.LogOffset] = pos
 		}
 
 		err = r.processFunc(ctx, token, r.FileAttributes)
