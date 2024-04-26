@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/collector/component"
@@ -66,6 +67,74 @@ func (p *Processor) ProcessLogs(ctx context.Context, ld plog.Logs) (plog.Logs, e
 	return res, err
 }
 
+var (
+	ErrAuditFieldNotFound         = errors.New("audit field not found")
+	ErrAuditFieldInvalidType      = errors.New("audit field invalid type")
+	ErrAuditFieldInvalidTimestamp = errors.New("audit field invalid timestamp")
+)
+
+func readAuditFieldStr(body map[string]interface{}, key string) (string, error) {
+	v, ok := body[key]
+	if !ok {
+		return "", fmt.Errorf("%w: %s", ErrAuditFieldNotFound, key)
+	}
+	s, ok := v.(string)
+	if !ok {
+		return "", fmt.Errorf("%w: %s", ErrAuditFieldInvalidType, key)
+	}
+	return s, nil
+}
+
+func auditMessageFromJournalDBody(body map[string]interface{}) (*auparse.AuditMessage, error) {
+
+	auditTypeStr, err := readAuditFieldStr(body, "_AUDIT_TYPE_NAME")
+	if err != nil {
+		return nil, err
+	}
+
+	var auditType auparse.AuditMessageType
+	err = auditType.UnmarshalText([]byte(auditTypeStr))
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal audit type %s: %w", auditTypeStr, err)
+	}
+
+	timestampStr, err := readAuditFieldStr(body, "_SOURCE_REALTIME_TIMESTAMP")
+	if err != nil {
+		return nil, err
+	}
+	n, err := strconv.ParseInt(timestampStr, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse audit timestamp %s: %w", auditTypeStr, err)
+	}
+
+	secs := n / 1_000_000
+	sourceTimestamp := time.Unix(secs, (n-secs*1_000_000)*1_000).UTC()
+
+	auditIDStr, err := readAuditFieldStr(body, "_AUDIT_ID")
+	if err != nil {
+		return nil, err
+	}
+
+	sequence, err := strconv.ParseUint(auditIDStr, 10, 32)
+	if err != nil {
+		return nil, err
+	}
+
+	messageStr, err := readAuditFieldStr(body, "MESSAGE")
+	if err != nil {
+		return nil, err
+	}
+
+	msg := &auparse.AuditMessage{
+		RecordType: auditType,
+		Timestamp:  sourceTimestamp,
+		Sequence:   uint32(sequence),
+		RawData:    strings.TrimSpace(messageStr[len(auditTypeStr):]),
+	}
+
+	return msg, nil
+}
+
 func (p *Processor) processLogs(ctx context.Context, ld plog.Logs) (plog.Logs, error) {
 	// I think for auditd is appropriate to reuse the resource and scope for coalesed event messages if they are all coming from the same source I guess
 	// Brute force this approach for now and then could try to figure out how to track all the resources/scopes down to coalesced messaages
@@ -85,14 +154,25 @@ func (p *Processor) processLogs(ctx context.Context, ld plog.Logs) (plog.Logs, e
 			for i := 0; i < logRecordSlice.Len(); i++ {
 				logRecord := logRecordSlice.At(i)
 
-				msg := logRecord.Body().AsString()
-				auditMsg, err := auparse.ParseLogLine(msg)
-				if err != nil {
-					p.logger.Error("failed processing logs", zap.Error(err))
-					return ld, err
+				var (
+					auditMsg *auparse.AuditMessage
+					err      error
+				)
+
+				body := logRecord.Body()
+				// If Body is a parsed key value (from journald) then try to create auparse.AuditMessage from there
+				if body.Type() == pcommon.ValueTypeMap {
+					auditMsg, err = auditMessageFromJournalDBody(body.Map().AsRaw())
+				} else {
+					msg := body.AsString()
+					auditMsg, err = auparse.ParseLogLine(msg)
+					if err != nil {
+						p.logger.Error("failed processing logs", zap.Error(err))
+						return ld, err
+					}
 				}
 
-				// Loosing original logRecord Attributes here
+				// Losing original logRecord Attributes here
 				// Not exactly sure at the moment what to do with them if we are
 				// collapsing multiple log records into fewer number of records with
 				// coalesced events
@@ -101,7 +181,7 @@ func (p *Processor) processLogs(ctx context.Context, ld plog.Logs) (plog.Logs, e
 				for _, evr := range evres {
 					if evr.Err != nil {
 						p.logger.Error("failed to coalesce messages: %v", zap.Error(err))
-						return ld, err
+						continue // ?
 					}
 					event := evr.Event
 
@@ -116,68 +196,78 @@ func (p *Processor) processLogs(ctx context.Context, ld plog.Logs) (plog.Logs, e
 					// not effecient
 					b, _ := json.Marshal(event)
 					var m map[string]any
-					_ = json.Unmarshal(b, &m)
+					err = json.Unmarshal(b, &m)
+					if err != nil {
+						p.logger.Error("failed marshalling event to map", zap.Error(err))
+						return ld, err
+					}
+
 					err = logRecord.Body().FromRaw(m)
 					if err != nil {
-						fmt.Println("FAILED logRecord.Body().FromRaw(m):", err)
+						p.logger.Error("failed logRecord.Body().FromRaw(m)", zap.Error(err))
+						return ld, err
 					}
 
-					attr := logRecord.Attributes()
+					setAttributes(m, logRecord.Attributes())
 
-					// Populate "auditd.log" from data
-					if data, ok := m["data"]; ok {
-						logMap := attr.PutEmptyMap("auditd").PutEmptyMap("log")
-						mdata, ok := data.(map[string]any)
-						if ok {
-							dataMap := pcommon.NewMap()
-							_ = dataMap.FromRaw(mdata)
-							dataMap.CopyTo(logMap)
-						}
-						logMap.PutInt("sequence", int64(event.Sequence))
-					}
+					// attr := logRecord.Attributes()
 
-					// Populate tags
-					if vtags, ok := m["tags"]; ok {
-						if tags, ok := vtags.([]string); ok && len(tags) > 0 {
-							tagsSlice := attr.PutEmptySlice("tags")
-							for _, tag := range tags {
-								tagsSlice.AppendEmpty().SetStr(tag)
-							}
-						}
-					}
+					// // Populate "auditd.log" from data
+					// if data, ok := m["data"]; ok {
+					// 	logMap := attr.PutEmptyMap("auditd").PutEmptyMap("log")
+					// 	mdata, ok := data.(map[string]any)
+					// 	if ok {
+					// 		dataMap := pcommon.NewMap()
+					// 		_ = dataMap.FromRaw(mdata)
+					// 		dataMap.CopyTo(logMap)
+					// 	}
+					// 	logMap.PutInt("sequence", int64(event.Sequence))
+					// }
 
-					// // Set process attributes
-					setProcess(attr, event)
+					// // Populate tags
+					// if vtags, ok := m["tags"]; ok {
+					// 	if tags, ok := vtags.([]string); ok && len(tags) > 0 {
+					// 		tagsSlice := attr.PutEmptySlice("tags")
+					// 		for _, tag := range tags {
+					// 			tagsSlice.AppendEmpty().SetStr(tag)
+					// 		}
+					// 	}
+					// }
 
-					// // TODO: log.offset is missing, not sure if possible to get yet
-					// // "offset": 1757629
+					// // // Set process attributes
+					// setProcess(attr, event)
 
-					// Set ECS attributes
-					if ecs, ok := m["ecs"]; ok {
-						mecs, ok := ecs.(map[string]any)
-						if ok {
-							ecsMap := pcommon.NewMap()
-							_ = ecsMap.FromRaw(mecs)
-							ecsMap.Range(func(k string, v pcommon.Value) bool {
-								tv := attr.PutEmpty(k)
-								v.CopyTo(tv)
-								if k == "event" {
-									// Set event action
-									if event.Summary.Action != "" {
-										attr.PutStr("event.action", event.Summary.Action)
-									}
-								}
-								return true
-							})
-						}
-					}
+					// // // TODO: log.offset is missing, not sure if possible to get yet
+					// // // "offset": 1757629
+
+					// // Set ECS attributes
+					// if ecs, ok := m["ecs"]; ok {
+					// 	mecs, ok := ecs.(map[string]any)
+					// 	if ok {
+					// 		ecsMap := pcommon.NewMap()
+					// 		_ = ecsMap.FromRaw(mecs)
+					// 		ecsMap.Range(func(k string, v pcommon.Value) bool {
+					// 			tv := attr.PutEmpty(k)
+					// 			v.CopyTo(tv)
+					// 			if k == "event" {
+					// 				// Set event action
+					// 				if event.Summary.Action != "" {
+					// 					attr.PutStr("event.action", event.Summary.Action)
+					// 				}
+					// 			}
+					// 			return true
+					// 		})
+					// 	}
+					// }
 				}
-
 			}
 		}
 	}
 
 	return ld, nil
+}
+func setAttributes(m map[string]any, attrs pcommon.Map) error {
+	return nil
 }
 
 func setProcess(attr pcommon.Map, event *aucoalesce.Event) {
