@@ -208,57 +208,13 @@ func (p *Processor) processLogs(ctx context.Context, ld plog.Logs) (plog.Logs, e
 						return ld, err
 					}
 
-					setAttributes(m, logRecord.Attributes())
+					resm := transform(m, logRecord.Attributes().AsRaw())
 
-					// attr := logRecord.Attributes()
-
-					// // Populate "auditd.log" from data
-					// if data, ok := m["data"]; ok {
-					// 	logMap := attr.PutEmptyMap("auditd").PutEmptyMap("log")
-					// 	mdata, ok := data.(map[string]any)
-					// 	if ok {
-					// 		dataMap := pcommon.NewMap()
-					// 		_ = dataMap.FromRaw(mdata)
-					// 		dataMap.CopyTo(logMap)
-					// 	}
-					// 	logMap.PutInt("sequence", int64(event.Sequence))
-					// }
-
-					// // Populate tags
-					// if vtags, ok := m["tags"]; ok {
-					// 	if tags, ok := vtags.([]string); ok && len(tags) > 0 {
-					// 		tagsSlice := attr.PutEmptySlice("tags")
-					// 		for _, tag := range tags {
-					// 			tagsSlice.AppendEmpty().SetStr(tag)
-					// 		}
-					// 	}
-					// }
-
-					// // // Set process attributes
-					// setProcess(attr, event)
-
-					// // // TODO: log.offset is missing, not sure if possible to get yet
-					// // // "offset": 1757629
-
-					// // Set ECS attributes
-					// if ecs, ok := m["ecs"]; ok {
-					// 	mecs, ok := ecs.(map[string]any)
-					// 	if ok {
-					// 		ecsMap := pcommon.NewMap()
-					// 		_ = ecsMap.FromRaw(mecs)
-					// 		ecsMap.Range(func(k string, v pcommon.Value) bool {
-					// 			tv := attr.PutEmpty(k)
-					// 			v.CopyTo(tv)
-					// 			if k == "event" {
-					// 				// Set event action
-					// 				if event.Summary.Action != "" {
-					// 					attr.PutStr("event.action", event.Summary.Action)
-					// 				}
-					// 			}
-					// 			return true
-					// 		})
-					// 	}
-					// }
+					err = logRecord.Attributes().FromRaw(resm)
+					if err != nil {
+						p.logger.Error("failed logRecord.Attributes().FromRaw", zap.Error(err))
+						return ld, err
+					}
 				}
 			}
 		}
@@ -266,8 +222,185 @@ func (p *Processor) processLogs(ctx context.Context, ld plog.Logs) (plog.Logs, e
 
 	return ld, nil
 }
-func setAttributes(m map[string]any, attrs pcommon.Map) error {
-	return nil
+
+func copyAttr(src map[string]any, srcKey string, dst map[string]any, dstKeyOpt ...string) {
+	var dstKey string
+	if len(dstKeyOpt) == 0 {
+		dstKey = srcKey
+	} else {
+		dstKey = dstKeyOpt[0]
+	}
+
+	if v, ok := src[srcKey]; ok {
+		dst[dstKey] = v
+	}
+}
+
+func createOrSetMap(dst map[string]any, key string) map[string]any {
+	if v, ok := dst[key]; !ok {
+		if m, ok := v.(map[string]any); ok {
+			return m
+		}
+	}
+	m := make(map[string]any)
+	dst[key] = m
+	return m
+}
+
+// transform
+func transform(m, attr map[string]any) map[string]any {
+	am := createOrSetMap(attr, "auditd")
+	copyAttr(m, "data", am)
+
+	copyAttr(m, "record_type", am, "message_type")
+
+	copyAttr(m, "result", am)
+	copyAttr(m, "session", am)
+	copyAttr(m, "summary", am)
+
+	copyAttr(m, "user", am)
+
+	adjustUser(am)
+
+	createUserRelated(m, attr)
+
+	// Set event attributes
+	evm := make(map[string]any)
+	if v, ok := m["ecs"]; ok {
+		if ecsm, ok := v.(map[string]any); ok {
+			if v, ok := ecsm["event"]; ok {
+				if em, ok := v.(map[string]any); ok {
+					copyAttr(em, "category", evm)
+					copyAttr(em, "type", evm)
+				}
+			}
+			copyAttr(ecsm, "user", attr)
+		}
+	}
+	evm["kind"] = "event"
+	if v, ok := m["summary"]; ok {
+		if sm, ok := v.(map[string]any); ok {
+			copyAttr(sm, "action", evm)
+		}
+	}
+	copyAttr(m, "sequence", evm)
+	copyAttr(m, "result", evm, "outcome")
+
+	attr["event"] = evm
+
+	copyAttr(m, "process", attr)
+	adjustProcess(attr)
+
+	return attr
+}
+
+func adjustProcess(m map[string]any) {
+	v, ok := m["process"]
+	if !ok {
+		return
+	}
+
+	pm, ok := v.(map[string]any)
+	if !ok {
+		return
+	}
+
+	if v, ok := pm["exe"]; ok {
+		delete(pm, "exe")
+		pm["executable"] = v
+	}
+
+	if v, ok := pm["pid"]; ok {
+		s, ok := v.(string)
+		if !ok {
+			return
+		}
+		if npid, err := strconv.Atoi(s); err == nil {
+			pm["pid"] = npid
+		}
+	}
+}
+
+func adjustUser(m map[string]any) {
+	v, ok := m["user"]
+	if !ok {
+		return
+	}
+
+	um, ok := v.(map[string]any)
+	if !ok {
+		return
+	}
+
+	v, ok = um["ids"]
+	if !ok {
+		return
+	}
+
+	idm, ok := v.(map[string]any)
+	if !ok {
+		return
+	}
+
+	v, ok = um["names"]
+	if !ok {
+		return
+	}
+
+	namesm, ok := v.(map[string]any)
+	if !ok {
+		return
+	}
+
+	delete(um, "ids")
+	delete(um, "names")
+
+	for k, s := range idm {
+		if k == "auid" {
+			um["audit"] = map[string]any{"id": s, "name": namesm[k]}
+		}
+	}
+}
+
+func createUserRelated(m, attr map[string]any) {
+	v, ok := m["ecs"]
+	if !ok {
+		return
+	}
+	ecsm, ok := v.(map[string]any)
+	if !ok {
+		return
+	}
+
+	v, ok = ecsm["user"]
+	if !ok {
+		return
+	}
+
+	um, ok := v.(map[string]any)
+	if !ok {
+		return
+	}
+
+	relm := make(map[string]any)
+	u := make([]any, 0, 1)
+
+	if nv, ok := um["name"]; ok {
+		u = append(u, nv)
+	}
+
+	for k, v := range um {
+		if k == "id" || k == "name" {
+			continue
+		}
+		if vm, ok := v.(map[string]any); ok {
+			if nv, ok := vm["name"]; ok {
+				u = append(u, nv)
+			}
+		}
+	}
+	relm["user"] = u
+	attr["related"] = relm
 }
 
 func setProcess(attr pcommon.Map, event *aucoalesce.Event) {

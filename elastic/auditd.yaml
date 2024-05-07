@@ -19,6 +19,9 @@ processors:
       - key: data_stream.dataset
         value: otel.auditd.log
         action: upsert
+  auditd:
+    resolve_ids: true
+
   resourcedetection/system:
     detectors: ["system"]
     system:
@@ -50,72 +53,19 @@ processors:
           enabled: true
         os.type:
           enabled: true
-  transform:
-    error_mode: ignore
-    log_statements:
-      - context: log
-        statements:
-          # auditd
-          - set(attributes["auditd.log.grantors"], body["AUDIT_FIELD_GRANTORS"])
-          - set(attributes["auditd.log.op"], body["AUDIT_FIELD_OP"])
-          - set(attributes["auditd.log.record_type"], body["_AUDIT_TYPE_NAME"])
-          - set(attributes["auditd.log.sequence"], Int(body["_AUDIT_ID"]))
-          - set(attributes["auditd.log.ses"], body["_AUDIT_SESSION"])
-          - set(attributes["auditd.log.subj"], body["_SELINUX_CONTEXT"])
-
-          # Lookup user and group ids experiment
-          # - set(attributes["auditd.log.AUID"], LookupUserID(body["_AUID"])) where body["_AUID"] != nil
-          # - set(attributes["auditd.log.UID"], LookupUserID(body["_UID"])) where body["_UID"] != nil
-          # - set(attributes["auditd.log.GID"], LookupGroupID(body["_GID"])) where body["_GID"] != nil
-
-          # Set user
-          - set(attributes["user.effective.name"], LookupUserID(body["_UID"]))
-          - set(attributes["user.audit.id"], body["_AUDIT_LOGINUID"])
-          - set(attributes["user.id"], body["_UID"])
-          - set(attributes["user.name"], LookupUserID(body["_UID"]))
-          - set(attributes["user.terminal"], body["AUDIT_FIELD_TERMINAL"])
-
-          # process
-          - set(attributes["process.executable"], body["_EXE"])
-          - set(attributes["process.exit_code"], Int(body["_AUDIT_FIELD_EXIT"]))
-          - set(attributes["process.name"], body["_COMM"])
-          - set(attributes["process.pid"], Int(body["_PID"]))
-          - set(attributes["process.parent.pid"], Int(body["_PPID"]))
-          # event
-          - set(attributes["event.kind"], "event")
-          - set(attributes["event.action"], body["_AUDIT_TYPE_NAME"])
-          - set(attributes["event.dataset"], resource.attributes["data_stream.dataset"])
-
-          # TODO: event category, type, action, outcome need to be resolved into proper values
-          - set(attributes["event.category"], ["process"])
-          - set(attributes["event.type"], ["info"])
-          - set(attributes["event.action"], body["_AUDIT_TYPE_NAME"])
-          - set(attributes["event.outcome"], ["success"])
-
-          # Using pipeline for the events category, type, etc. resolution
-          # In order to use the existing pipeline with minimal modifications need to prepend "type=" before raw message
-          # That's what Grok is expecting at the moment
-          # https://github.com/elastic/integrations/blob/main/packages/auditd/data_stream/log/elasticsearch/ingest_pipeline/default.yml
-          #
-
-          # The pipeline was slightly modified since we can't add top level "message" attribute at this level
-          # so we change the pipeline to look into attributes.auditd.logs.message field
-          # - set(body["MESSAGE"], Concat(["type", body["MESSAGE"]], "="))
-
 
 exporters:
   debug:
-    # verbosity: detailed
-    verbosity: normal
+    verbosity: detailed
+    # verbosity: normal
   elasticsearch:
     flush:
       interval: 1s
     endpoints:
-      - https://0d1c5d78186540019eb8ddce80f4ef7c.us-west2.gcp.elastic-cloud.com
+      - https://d8796c0c914a480bb5c01fc4ac2e4a99.us-west2.gcp.elastic-cloud.com
     user: elastic
-    password: oQO1decGF4VPATiVNrYvR39C
+    password: RpoNZJnd0ZKcd9xxxxx
     logs_index: "logs-otel.auditd.log-default"
-    # pipeline: "logs-otel.auditd.log-pipeline"
     mapping:
       mode: otel
 
@@ -124,7 +74,8 @@ service:
     logs:
       receivers:
         - journald
-      processors: ["resource", "resourcedetection/system", "transform"]
+      processors: ["resource", "auditd", "resourcedetection/system"]
+      # processors: ["resource"]
       exporters:
         - debug
         - elasticsearch
