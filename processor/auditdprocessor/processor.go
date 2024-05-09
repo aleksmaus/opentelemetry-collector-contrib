@@ -39,7 +39,7 @@ type Processor struct {
 func NewProcessor(cfg Config, settings component.TelemetrySettings) (*Processor, error) {
 
 	//TODO: pass the logger
-	reassembler, err := NewSyncReassember(5, 2*time.Second, true)
+	reassembler, err := NewSyncReassember(5, 2*time.Second, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +108,8 @@ func auditMessageFromJournalDBody(body map[string]interface{}) (*auparse.AuditMe
 	}
 
 	secs := n / 1_000_000
-	sourceTimestamp := time.Unix(secs, (n-secs*1_000_000)*1_000).UTC()
+	msec := (n - secs*1_000_000)
+	sourceTimestamp := time.Unix(secs, msec*1_000).UTC()
 
 	auditIDStr, err := readAuditFieldStr(body, "_AUDIT_ID")
 	if err != nil {
@@ -129,7 +130,7 @@ func auditMessageFromJournalDBody(body map[string]interface{}) (*auparse.AuditMe
 		RecordType: auditType,
 		Timestamp:  sourceTimestamp,
 		Sequence:   uint32(sequence),
-		RawData:    strings.TrimSpace(messageStr[len(auditTypeStr):]),
+		RawData:    fmt.Sprintf("type=%s msg=audit(%d.%d:%v): %s", auditTypeStr, secs, msec/1000, sequence, strings.TrimSpace(messageStr[len(auditTypeStr):])), // render the full log message to match what's collected with auditd integration
 	}
 
 	return msg, nil
@@ -208,12 +209,17 @@ func (p *Processor) processLogs(ctx context.Context, ld plog.Logs) (plog.Logs, e
 						return ld, err
 					}
 
-					resm := transform(m, logRecord.Attributes().AsRaw())
+					resm := transform(m, logRecord.Attributes().AsRaw(), evr.RawMessages)
 
 					err = logRecord.Attributes().FromRaw(resm)
 					if err != nil {
 						p.logger.Error("failed logRecord.Attributes().FromRaw", zap.Error(err))
 						return ld, err
+					}
+					if len(evr.RawMessages) > 0 {
+						for _, rm := range evr.RawMessages {
+							logRecord.Attributes().PutEmptySlice("event.original").AppendEmpty().SetStr(rm)
+						}
 					}
 				}
 			}
@@ -248,7 +254,7 @@ func createOrSetMap(dst map[string]any, key string) map[string]any {
 }
 
 // transform
-func transform(m, attr map[string]any) map[string]any {
+func transform(m, attr map[string]any, rawMessages []string) map[string]any {
 	am := createOrSetMap(attr, "auditd")
 	copyAttr(m, "data", am)
 
@@ -285,6 +291,10 @@ func transform(m, attr map[string]any) map[string]any {
 	}
 	copyAttr(m, "sequence", evm)
 	copyAttr(m, "result", evm, "outcome")
+
+	if len(rawMessages) != 0 {
+		evm["original"] = strings.Join(rawMessages, " ")
+	}
 
 	attr["event"] = evm
 

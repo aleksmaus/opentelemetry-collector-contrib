@@ -9,7 +9,8 @@ import (
 
 // Config defines the configuration for the processor.
 type Config struct {
-	ResolveIDs bool `mapstructure:"resolve_ids"` // If true resolve user/group ids into names
+	ResolveIDs            bool `mapstructure:"resolve_ids"`             // If true resolve user/group ids into names
+	PreserveOriginalEvent bool `mapstructure:"preserve_original_event"` // If true resolve user/group ids into names
 }
 
 var _ component.Config = (*Config)(nil)

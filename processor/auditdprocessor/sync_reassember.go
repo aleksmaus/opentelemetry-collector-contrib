@@ -10,20 +10,21 @@ import (
 )
 
 type EventResolution struct {
-	Event *aucoalesce.Event
-	Err   error
+	Event       *aucoalesce.Event
+	RawMessages []string
+	Err         error
 }
 
 type SyncReassembler struct {
-	resolveID bool
+	cfg Config
 
 	reassembler *libaudit.Reassembler
 	completed   []EventResolution
 }
 
-func NewSyncReassember(maxInFlight int, timeout time.Duration, resolveID bool) (*SyncReassembler, error) {
+func NewSyncReassember(maxInFlight int, timeout time.Duration, cfg Config) (*SyncReassembler, error) {
 
-	r := &SyncReassembler{resolveID: resolveID}
+	r := &SyncReassembler{cfg: cfg}
 
 	reassembler, err := libaudit.NewReassembler(maxInFlight, timeout, r)
 	if err != nil {
@@ -42,7 +43,7 @@ func (r *SyncReassembler) PushMessage(msg *auparse.AuditMessage) []EventResoluti
 	r.reassembler.PushMessage(msg)
 
 	// "maintaining" on every call, do not care about errReassemblerClosed
-	// TODO: can improve "maintenance" interval calling it only
+	// TODO: could improve "maintenance" interval calling it only
 	// when the time since the last call >= maintenance interval
 	_ = r.reassembler.Maintain()
 
@@ -56,7 +57,14 @@ func (r *SyncReassembler) ReassemblyComplete(msgs []*auparse.AuditMessage) {
 	if err != nil {
 		log.Printf("[WARN] failed writing message to output: %v", err)
 	}
-	r.completed = append(r.completed, EventResolution{Event: event, Err: err})
+	var rawMessages []string
+	if r.cfg.PreserveOriginalEvent {
+		rawMessages = make([]string, 0, len(msgs))
+		for _, msg := range msgs {
+			rawMessages = append(rawMessages, msg.RawData)
+		}
+	}
+	r.completed = append(r.completed, EventResolution{Event: event, RawMessages: rawMessages, Err: err})
 }
 
 func (r *SyncReassembler) EventsLost(count int) {
@@ -68,7 +76,7 @@ func (r *SyncReassembler) resolveMessages(msgs []*auparse.AuditMessage) (*aucoal
 	if err != nil {
 		return nil, err
 	}
-	if r.resolveID {
+	if r.cfg.ResolveIDs {
 		aucoalesce.ResolveIDs(event)
 	}
 	return event, nil
