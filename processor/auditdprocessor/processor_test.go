@@ -33,3 +33,78 @@ func TestAuditMessageFromJournalDBody(t *testing.T) {
 		t.Fatal(diff)
 	}
 }
+
+func TestAdjustUser(t *testing.T) {
+	const in = `{
+		"user": {
+		"ids": {
+		  "auid": "1000",
+		  "egid": "0",
+		  "euid": "0",
+		  "fsgid": "0",
+		  "fsuid": "0",
+		  "gid": "0",
+		  "sgid": "0",
+		  "suid": "0",
+		  "uid": "0"
+		},
+		"names": {
+		  "auid": "amaus",
+		  "egid": "root",
+		  "euid": "root",
+		  "fsgid": "root",
+		  "fsuid": "root",
+		  "gid": "root",
+		  "sgid": "root",
+		  "suid": "root",
+		  "uid": "root"
+		},
+		"selinux": {
+		  "user": "unconfined"
+		}
+	  }}`
+
+	const want = `{"user": {
+		"saved": {
+		  "name": "root",
+		  "id": "0",
+		  "group": {
+			"name": "root",
+			"id": "0"
+		  }
+		},
+		"audit": {
+		  "name": "amaus",
+		  "id": "1000"
+		},
+		"selinux": {
+		  "user": "unconfined"
+		},
+		"filesystem": {
+		  "name": "root",
+		  "id": "0",
+		  "group": {
+			"name": "root",
+			"id": "0"
+		  }
+		}
+	}}`
+
+	m := mapFromJSON(t, in)
+	adjustUser(m)
+
+	wantMap := mapFromJSON(t, want)
+
+	diff := cmp.Diff(wantMap, m)
+	if diff != "" {
+		t.Fatal(diff)
+	}
+}
+
+func mapFromJSON(t *testing.T, s string) (out map[string]any) {
+	err := json.Unmarshal([]byte(s), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}

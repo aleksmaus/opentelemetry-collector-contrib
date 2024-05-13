@@ -130,7 +130,7 @@ func auditMessageFromJournalDBody(body map[string]interface{}) (*auparse.AuditMe
 		RecordType: auditType,
 		Timestamp:  sourceTimestamp,
 		Sequence:   uint32(sequence),
-		RawData:    fmt.Sprintf("type=%s msg=audit(%d.%d:%v): %s", auditTypeStr, secs, msec/1000, sequence, strings.TrimSpace(messageStr[len(auditTypeStr):])), // render the full log message to match what's collected with auditd integration
+		RawData:    fmt.Sprintf("type=%s msg=audit(%d.%03d:%v): %s", auditTypeStr, secs, msec/1000, sequence, strings.TrimSpace(messageStr[len(auditTypeStr):])), // render the full log message to match what's collected with auditd integration
 	}
 
 	return msg, nil
@@ -216,10 +216,15 @@ func (p *Processor) processLogs(ctx context.Context, ld plog.Logs) (plog.Logs, e
 						p.logger.Error("failed logRecord.Attributes().FromRaw", zap.Error(err))
 						return ld, err
 					}
+
 					if len(evr.RawMessages) > 0 {
+						aum := logRecord.Attributes().PutEmptySlice("auditd.messages")
 						for _, rm := range evr.RawMessages {
-							logRecord.Attributes().PutEmptySlice("event.original").AppendEmpty().SetStr(rm)
+							aum.AppendEmpty().SetStr(rm)
 						}
+
+						evo := strings.Join(evr.RawMessages, " ")
+						logRecord.Attributes().PutStr("event.original", evo)
 					}
 				}
 			}
@@ -266,8 +271,6 @@ func transform(m, attr map[string]any, rawMessages []string) map[string]any {
 
 	copyAttr(m, "user", am)
 
-	adjustUser(am)
-
 	createUserRelated(m, attr)
 
 	// Set event attributes
@@ -295,6 +298,8 @@ func transform(m, attr map[string]any, rawMessages []string) map[string]any {
 	if len(rawMessages) != 0 {
 		evm["original"] = strings.Join(rawMessages, " ")
 	}
+
+	adjustUser(am)
 
 	attr["event"] = evm
 
@@ -329,6 +334,18 @@ func adjustProcess(m map[string]any) {
 			pm["pid"] = npid
 		}
 	}
+
+	if v, ok := pm["ppid"]; ok {
+		s, ok := v.(string)
+		if !ok {
+			return
+		}
+		if npid, err := strconv.Atoi(s); err == nil {
+			pm["parent"] = map[string]any{
+				"pid": npid,
+			}
+		}
+	}
 }
 
 func adjustUser(m map[string]any) {
@@ -337,38 +354,75 @@ func adjustUser(m map[string]any) {
 		return
 	}
 
-	um, ok := v.(map[string]any)
+	src, ok := v.(map[string]any)
 	if !ok {
 		return
 	}
 
-	v, ok = um["ids"]
+	dst := make(map[string]any)
+
+	m["user"] = dst
+	v, ok = src["ids"]
 	if !ok {
 		return
 	}
 
-	idm, ok := v.(map[string]any)
+	ids, ok := v.(map[string]any)
 	if !ok {
 		return
 	}
 
-	v, ok = um["names"]
+	v, ok = src["names"]
 	if !ok {
 		return
 	}
 
-	namesm, ok := v.(map[string]any)
+	names, ok := v.(map[string]any)
 	if !ok {
 		return
 	}
 
-	delete(um, "ids")
-	delete(um, "names")
+	transformUserID(ids, names, "a", "audit", dst)
+	transformUserID(ids, names, "s", "saved", dst)
+	transformUserID(ids, names, "fs", "filesystem", dst)
 
-	for k, s := range idm {
-		if k == "auid" {
-			um["audit"] = map[string]any{"id": s, "name": namesm[k]}
+	if v, ok := src["selinux"]; ok {
+		dst["selinux"] = v
+	}
+	m["user"] = dst
+}
+
+func transformUserID(ids, names map[string]any, prefix, name string, dst map[string]any) {
+	var uid, gid string
+
+	if v, ok := ids[prefix+"uid"]; ok {
+		if s, ok := v.(string); ok {
+			uid = s
 		}
+	}
+	if v, ok := ids[prefix+"gid"]; ok {
+		if s, ok := v.(string); ok {
+			gid = s
+		}
+	}
+
+	if uid != "" {
+		user := map[string]any{"id": uid}
+		if v, ok := names[prefix+"uid"]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				user["name"] = s
+			}
+		}
+		if gid != "" {
+			group := map[string]any{"id": gid}
+			if v, ok := names[prefix+"gid"]; ok {
+				if s, ok := v.(string); ok && s != "" {
+					group["name"] = s
+				}
+			}
+			user["group"] = group
+		}
+		dst[name] = user
 	}
 }
 
