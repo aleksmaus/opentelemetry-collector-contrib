@@ -19,6 +19,12 @@ processors:
       - key: data_stream.dataset
         value: otel.auditd.log
         action: upsert
+      - key: host.os.type
+        from_attribute: os.type
+        action: upsert
+      - key: host.os.description
+        from_attribute: os.description
+        action: upsert
   auditd:
     resolve_ids: true
     preserve_original_event: true
@@ -65,7 +71,7 @@ exporters:
     endpoints:
       - https://d8796c0c914a480bb5c01fc4ac2e4a99.us-west2.gcp.elastic-cloud.com
     user: elastic
-    password: RpoNZJnd0ZKcd9WOojeaxxxx
+    password: RpoNZJnd0ZKcd9WOojxxxxx
     logs_index: "logs-otel.auditd.log-default"
     mapping:
       mode: otel
@@ -75,7 +81,7 @@ service:
     logs:
       receivers:
         - journald
-      processors: ["resource", "auditd", "resourcedetection/system"]
+      processors: ["resourcedetection/system", "resource", "auditd"]
       # processors: ["resource", "auditd"]
       exporters:
         - debug

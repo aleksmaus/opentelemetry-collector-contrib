@@ -299,7 +299,7 @@ func transform(m, attr map[string]any, rawMessages []string) map[string]any {
 		evm["original"] = strings.Join(rawMessages, " ")
 	}
 
-	adjustUser(am)
+	adjustUser(am, attr)
 
 	attr["event"] = evm
 
@@ -345,10 +345,11 @@ func adjustProcess(m map[string]any) {
 				"pid": npid,
 			}
 		}
+		delete(pm, "ppid")
 	}
 }
 
-func adjustUser(m map[string]any) {
+func adjustUser(m, attr map[string]any) {
 	v, ok := m["user"]
 	if !ok {
 		return
@@ -390,6 +391,39 @@ func adjustUser(m map[string]any) {
 		dst["selinux"] = v
 	}
 	m["user"] = dst
+
+	// Insert user/group info into attributes map
+	var uid, gid string
+
+	if v, ok := ids["uid"]; ok {
+		if s, ok := v.(string); ok {
+			uid = s
+		}
+	}
+	if v, ok := ids["gid"]; ok {
+		if s, ok := v.(string); ok {
+			gid = s
+		}
+	}
+
+	if uid != "" {
+		user := map[string]any{"id": uid}
+		if v, ok := names["uid"]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				user["name"] = s
+			}
+		}
+		if gid != "" {
+			group := map[string]any{"id": gid}
+			if v, ok := names["gid"]; ok {
+				if s, ok := v.(string); ok && s != "" {
+					group["name"] = s
+				}
+			}
+			user["group"] = group
+		}
+		attr["user"] = user
+	}
 }
 
 func transformUserID(ids, names map[string]any, prefix, name string, dst map[string]any) {
