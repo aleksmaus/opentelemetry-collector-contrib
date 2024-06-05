@@ -1,0 +1,8 @@
+type: auditd
+
+status:
+  class: processor
+  stability:
+    development: [logs]
+  codeowners:
+    active: [aleksmaus]
